@@ -12,7 +12,7 @@ from vai.dpuv1.rt.xdnn_rt_tf import TFxdnnRT as xdnnRT
 from vai.dpuv1.rt.xdnn_util import make_list
 from vai.dpuv1.rt.xdnn_io import default_xdnn_arg_parser
 
-QUANTIZE = True
+QUANTIZE = False
 
 # Environment Variables (obtained by running "source overlaybins/setup.sh")
 HOME = os.getenv('HOME', '/home/mluser/')
@@ -97,3 +97,88 @@ if QUANTIZE:
         "--output_dir",         MODELDIR,
         "--net_name",           quantInfo,
         "--quant_info"])
+else:
+
+    def get_args(startnode=inputNode, finalnode=outputNode):
+        return {
+            ### Some standard partitioner arguments [EDITABLE]
+            'startnode': startnode,
+            'finalnode': finalnode,
+
+            ### Some standard compiler arguments [PLEASE DONT TOUCH]
+            'dsp': 96,
+            'memory': 9,
+            'bytesperpixels': 1,
+            'ddr': 256,
+            'data_format': 'NHWC',
+            'mixmemorystrategy': True,
+            'noreplication': True,
+            'xdnnv3': True,
+            'usedeephi': True,
+            'quantz': ''
+        }
+
+
+    ## load default arguments
+    FLAGS, unparsed = default_xdnn_arg_parser().parse_known_args([])
+
+    ### Partition and compile
+    rt = xdnnRT(FLAGS,
+                networkfile=protoBuffer,
+                quant_cfgfile=quantInfo,
+                xclbin=XCLBIN,
+                device='FPGA',
+                placeholdershape="{{'{}':[1,{},{},3]}}".format(inputNode, *[int(x) for x in inputShape.split(',')]),
+                **get_args(inputNode, outputNode)
+                )
+
+
+    ## Pre-processing function
+    def preprocess(image):
+        input_height, input_width = 224, 224
+
+        ## Image preprocessing using numpy
+        img = cv2.imread(image).astype(np.float32)
+        img -= np.array(make_list(means)).reshape(-1, 3).astype(np.float32)
+        img = cv2.resize(img, (input_width, input_height))
+
+        return img
+
+
+    ## Choose image to run, display it for reference
+    image = IMAGEDIR + "ILSVRC2012_val_00000003.JPEG"
+
+    ## Accelerated execution
+
+    ## load the accelerated graph
+    graph = rt.load_partitioned_graph()
+
+    ## run the tensorflow graph as usual (additional operations can be added to the graph)
+    with tf.Session(graph=graph) as sess:
+        input_tensor = graph.get_operation_by_name(inputNode).outputs[0]
+        output_tensor = graph.get_operation_by_name(outputNode).outputs[0]
+
+        import time
+        for i in range(20):
+            start_time = time.time()
+            predictions = sess.run(output_tensor, feed_dict={input_tensor: [preprocess(image)]})
+            end_time = time.time()
+            print("time with preprocess:", end_time - start_time)
+        preprocessed_image = preprocess(image)
+        for i in range(20):
+            start_time = time.time()
+            predictions = sess.run(output_tensor, feed_dict={input_tensor: [preprocessed_image]})
+            end_time = time.time()
+            print("time without preprocess:", end_time - start_time)
+
+    labels = np.loadtxt(LABELSLIST, str, delimiter='\t')
+    top_k = predictions[0].argsort()[:-6:-1]
+
+    for l, p in zip(labels[top_k], predictions[0][top_k]):
+        print(l, " : ", p)
+
+    iter_cnt = 100
+    batch_size = 1
+    label_offset = 0
+
+    top5_accuracy(graph, inputNode, outputNode, iter_cnt, batch_size, pre_process, label_offset)
