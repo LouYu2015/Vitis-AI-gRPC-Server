@@ -170,6 +170,16 @@ else:
             predictions = sess.run(output_tensor, feed_dict={input_tensor: [preprocessed_image]})
             end_time = time.time()
             print("time without preprocess:", end_time - start_time)
+        for i in range(20):
+            start_time = time.time()
+            predictions = sess.run(output_tensor, feed_dict={input_tensor: [preprocessed_image]*10})
+            end_time = time.time()
+            print("time without preprocess 10 batch:", end_time - start_time)
+        for i in range(20):
+            start_time = time.time()
+            predictions = sess.run(output_tensor, feed_dict={input_tensor: [preprocessed_image]*100})
+            end_time = time.time()
+            print("time without preprocess 100 batch:", end_time - start_time)
 
     labels = np.loadtxt(LABELSLIST, str, delimiter='\t')
     top_k = predictions[0].argsort()[:-6:-1]
